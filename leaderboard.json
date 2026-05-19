@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 [
   {
     "name": "Player",
@@ -87,4 +88,95 @@
     "name": "Player",
     "score": -100
   }
+=======
+[
+  {
+    "name": "Player",
+    "score": 470
+  },
+  {
+    "name": "Player",
+    "score": 300
+  },
+  {
+    "name": "Player",
+    "score": 300
+  },
+  {
+    "name": "Player",
+    "score": 300
+  },
+  {
+    "name": "Player",
+    "score": 300
+  },
+  {
+    "name": "Player",
+    "score": 250
+  },
+  {
+    "name": "Player",
+    "score": 250
+  },
+  {
+    "name": "Player",
+    "score": 70
+  },
+  {
+    "name": "Player",
+    "score": 0
+  },
+  {
+    "name": "Player",
+    "score": 0
+  },
+  {
+    "name": "Player",
+    "score": 0
+  },
+  {
+    "name": "Player",
+    "score": 0
+  },
+  {
+    "name": "Player",
+    "score": 0
+  },
+  {
+    "name": "Player",
+    "score": 0
+  },
+  {
+    "name": "Player",
+    "score": 0
+  },
+  {
+    "name": "Player",
+    "score": 0
+  },
+  {
+    "name": "Player",
+    "score": 0
+  },
+  {
+    "name": "Player",
+    "score": 0
+  },
+  {
+    "name": "Player",
+    "score": 0
+  },
+  {
+    "name": "Player",
+    "score": 0
+  },
+  {
+    "name": "Player",
+    "score": 0
+  },
+  {
+    "name": "Player",
+    "score": -100
+  }
+>>>>>>> 17b9509fddbc3fb2f1cd46574ed71afdaa5a183c
 ]
