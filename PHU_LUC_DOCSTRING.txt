@@ -1,0 +1,987 @@
+============================================================
+--- MODULE: algorithms.py ---
+Toàn bộ cấu trúc dữ liệu & giải thuật của game.
+
+Module này KHÔNG import pygame và có thể được test hoàn toàn độc lập.
+
+Các cấu trúc dữ liệu được triển khai:
+    - MinHeap      : Hàng đợi ưu tiên quản lý khách theo thời gian còn lại.
+    - WaitingQueue : Hàng đợi FIFO cho khách đứng chờ bên ngoài.
+    - ActionStack  : Stack có giới hạn dung lượng cho bình lắc (shaker).
+    - Trie         : Cây tiền tố hỗ trợ autocomplete tên công thức.
+    - InvertedIndex: Chỉ mục đảo ngược tag → công thức để "đọc vị" khách.
+
+Các giải thuật sắp xếp:
+    - quick_sort_leaderboard  : Sắp xếp bảng điểm (giảm dần theo điểm).
+    - merge_sort_inventory    : Sắp xếp kho nguyên liệu (ổn định, đa tiêu chí).
+
+  [CLASS] MinHeap:
+    Min-Heap tùy chỉnh để quản lý hàng đợi khách đang ngồi tại quầy.
+
+Mỗi phần tử trong heap có dạng: ``[time_left, customer_id, customer_obj]``
+
+Khách có ``time_left`` nhỏ nhất (sắp hết kiên nhẫn nhất) luôn ở đỉnh heap,
+giúp game ưu tiên phục vụ đúng người trước.
+
+Độ phức tạp:
+    - push / pop: O(log n)
+    - remove_by_id: O(n) tìm + O(log n) heapify
+    - update_times / _build_heap: O(n)
+    - peek: O(1)
+
+    (Method) __init__:
+      Khởi tạo heap rỗng.
+    (Method) push:
+      Thêm một phần tử mới vào heap.
+
+Args:
+    item (list): ``[time_left, customer_id, customer_obj]``
+
+Complexity: O(log n)
+    (Method) pop:
+      Lấy và xóa phần tử có ``time_left`` nhỏ nhất (đỉnh heap).
+
+Returns:
+    list | None: Phần tử ``[time_left, customer_id, customer_obj]``,
+    hoặc ``None`` nếu heap rỗng.
+
+Complexity: O(log n)
+    (Method) remove_by_id:
+      Xóa một phần tử bất kỳ khỏi heap theo ``customer_id``.
+
+Được gọi khi bartender đã phục vụ xong một khách cụ thể
+(không nhất thiết phải là khách gấp nhất).
+
+Thuật toán:
+    1. Tìm tuyến tính phần tử có ``customer_id`` khớp — O(n).
+    2. Swap với phần tử cuối và xóa cuối.
+    3. Heapify cả lên lẫn xuống tại vị trí vừa swap — O(log n).
+
+Chấp nhận được vì heap thực tế rất nhỏ (tối đa 4–5 khách).
+
+Args:
+    customer_id (int): ID duy nhất của khách cần xóa.
+
+Returns:
+    list | None: Phần tử bị xóa, hoặc ``None`` nếu không tìm thấy.
+    (Method) update_times:
+      Giảm ``time_left`` của toàn bộ khách trong heap đi ``dt`` giây,
+sau đó rebuild heap để đảm bảo heap property.
+
+Args:
+    dt (float): Thời gian delta (giây) kể từ frame trước.
+
+Note:
+    Vì tất cả key đều thay đổi cùng lúc, việc rebuild toàn bộ
+    (O(n)) hiệu quả hơn heapify từng phần tử riêng lẻ.
+    (Method) peek:
+      Xem phần tử đỉnh heap mà không xóa.
+
+Returns:
+    list | None: Phần tử có ``time_left`` nhỏ nhất, hoặc ``None`` nếu rỗng.
+    (Method) is_empty:
+      Trả về ``True`` nếu heap không có phần tử nào.
+    (Method) __len__:
+      Số phần tử hiện có trong heap.
+    (Method) _heapify_up:
+      Đẩy phần tử tại ``index`` lên đúng vị trí trong heap.
+
+So sánh với node cha và swap nếu nhỏ hơn, lặp lại đến khi
+heap property được thỏa mãn.
+
+Args:
+    index (int): Chỉ số phần tử cần heapify lên.
+    (Method) _heapify_down:
+      Đẩy phần tử tại ``index`` xuống đúng vị trí trong heap.
+
+So sánh với cả hai node con và swap với con nhỏ hơn nếu cần,
+lặp lại đến khi heap property được thỏa mãn.
+
+Args:
+    index (int): Chỉ số phần tử cần heapify xuống.
+    (Method) _build_heap:
+      Xây dựng lại heap từ mảng hiện tại bằng cách heapify từ dưới lên.
+
+Được gọi sau ``update_times()`` hoặc bất kỳ thao tác nào
+làm thay đổi nhiều key cùng lúc.
+
+Complexity: O(n) — hiệu quả hơn O(n log n) của việc push từng phần tử.
+  [CLASS] WaitingQueue:
+    Hàng đợi FIFO cho khách đứng chờ bên ngoài khi quầy đã đầy chỗ.
+
+Khách đến trước sẽ được vào quầy trước (first-in, first-out).
+Khi một chỗ ngồi trống (khách rời đi hoặc bị phục vụ xong),
+``CustomerManager`` sẽ gọi ``dequeue()`` để đưa khách tiếp theo vào.
+
+    (Method) __init__:
+      Khởi tạo hàng đợi rỗng.
+    (Method) enqueue:
+      Thêm khách vào cuối hàng đợi.
+
+Args:
+    customer (Customer): Đối tượng khách hàng cần xếp hàng.
+    (Method) dequeue:
+      Lấy khách đầu hàng ra (người chờ lâu nhất).
+
+Returns:
+    Customer | None: Khách đầu hàng, hoặc ``None`` nếu hàng rỗng.
+    (Method) is_empty:
+      Trả về ``True`` nếu không có khách nào đang chờ.
+    (Method) __len__:
+      Số khách đang đứng chờ bên ngoài.
+    (Method) peek:
+      Xem khách đầu hàng mà không lấy ra.
+
+Returns:
+    Customer | None: Khách đầu hàng, hoặc ``None`` nếu rỗng.
+  [CLASS] LiquidShaker:
+    Quản lý bình lắc theo thể tích (ml) và thuật toán trộn màu chất lỏng.
+
+Mô phỏng bình pha chế thực tế: mỗi lần rót sẽ cộng dồn thể tích và
+tính màu hỗn hợp theo trọng số thể tích (weighted average RGB).
+
+Attributes:
+    capacity (float): Dung tích tối đa của bình (ml).
+    contents (dict): Ánh xạ ``{tên_nguyên_liệu: số_ml}`` hiện có trong bình.
+    current_volume (float): Tổng thể tích đang chứa (ml).
+    mixed_color (tuple | None): Màu RGB hiện tại của hỗn hợp,
+        ``None`` nếu bình rỗng.
+
+    (Method) __init__:
+      Khởi tạo bình lắc rỗng với dung tích cho trước.
+
+Args:
+    capacity (float): Dung tích tối đa (ml). Mặc định là ``300.0``.
+    (Method) pour:
+      Rót một lượng nguyên liệu vào bình và cập nhật màu hỗn hợp.
+
+Nếu bình đã đầy, trả về ``False`` ngay. Nếu lượng rót vượt quá
+dung tích còn lại, tự động cắt bớt để không tràn bình.
+
+Màu hỗn hợp được tính bằng trung bình có trọng số (weighted average)
+theo thể tích: màu mới được pha với màu cũ theo tỉ lệ thể tích tương ứng.
+
+Args:
+    item_name (str): Tên nguyên liệu đang rót (vd: ``"Vodka"``).
+    amount (float): Lượng rót (ml).
+    color (tuple): Màu RGB của nguyên liệu, dạng ``(R, G, B)``.
+
+Returns:
+    bool: ``True`` nếu rót thành công, ``False`` nếu bình đã đầy.
+    (Method) clear:
+      Đổ bỏ toàn bộ chất lỏng, đặt lại bình về trạng thái rỗng.
+
+Reset ``contents``, ``current_volume`` về 0 và ``mixed_color`` về ``None``.
+Được gọi khi người chơi nhấn phím C hoặc sau khi serve xong.
+    (Method) get_proportions:
+      Tính tỉ lệ phần trăm thể tích của từng nguyên liệu trong bình.
+
+Được dùng bởi ``MixingEngine.check_and_serve()`` để so sánh
+với công thức chuẩn và tính độ lệch (margin of error).
+
+Returns:
+    dict: ``{tên_nguyên_liệu: tỉ_lệ}`` với tổng các tỉ lệ = 1.0,
+    hoặc ``{}`` nếu bình đang rỗng.
+  [CLASS] TrieNode:
+    Một node trong cây Trie.
+
+Attributes:
+    children (dict): Ánh xạ ký tự → TrieNode con.
+    is_end (bool): ``True`` nếu node này đánh dấu kết thúc một từ hợp lệ.
+    item_data (dict | None): Dữ liệu công thức đính kèm khi ``is_end = True``.
+
+    (Method) __init__:
+      Khởi tạo node với không có con và chưa là kết thúc từ.
+  [CLASS] Trie:
+    Cây tiền tố (Prefix Tree) dùng để tìm kiếm và autocomplete tên công thức.
+
+Hỗ trợ:
+    - Chèn tên công thức vào Trie kèm dữ liệu đính kèm.
+    - Tìm kiếm theo tiền tố (prefix) với độ phức tạp O(L),
+      trong đó L là độ dài chuỗi tìm kiếm.
+    - Trả về tất cả công thức bắt đầu bằng một prefix cho trước (DFS).
+
+Ứng dụng trong game:
+    Thanh tìm kiếm (SearchBar) gọi ``autocomplete()`` mỗi khi người chơi
+    gõ ký tự mới để hiển thị danh sách công thức khớp.
+
+    (Method) __init__:
+      Khởi tạo Trie với root node rỗng.
+    (Method) insert:
+      Chèn một tên công thức vào Trie kèm dữ liệu.
+
+Tất cả ký tự được chuyển thành chữ thường trước khi lưu
+để đảm bảo tìm kiếm không phân biệt hoa/thường.
+
+Args:
+    word (str): Tên công thức cần chèn (vd: ``"Margarita"``).
+    data (dict): Dữ liệu công thức từ ``settings.RECIPES_DATA``
+        (ingredients, tags, hidden).
+    (Method) search_prefix:
+      Duyệt Trie theo ``prefix`` và trả về node tại cuối chuỗi.
+
+Args:
+    prefix (str): Chuỗi tiền tố cần tìm (không phân biệt hoa/thường).
+
+Returns:
+    TrieNode | None: Node cuối cùng của prefix,
+    hoặc ``None`` nếu prefix không tồn tại trong Trie.
+    (Method) autocomplete:
+      Trả về tất cả công thức bắt đầu bằng ``prefix``.
+
+Thực hiện DFS từ node cuối của prefix để thu thập toàn bộ
+từ hợp lệ (``is_end = True``) trong cây con.
+
+Args:
+    prefix (str): Chuỗi tiền tố cần tìm.
+
+Returns:
+    list[tuple[str, dict]]: Danh sách ``(tên_công_thức, dữ_liệu)``
+    khớp với prefix. Rỗng nếu không tìm thấy.
+    (Method) _dfs:
+      Duyệt DFS từ ``node``, tích lũy kết quả vào ``results``.
+
+Args:
+    node (TrieNode): Node hiện tại đang duyệt.
+    current (str): Chuỗi đã tích lũy đến node hiện tại.
+    results (list): List kết quả được cập nhật in-place.
+  [CLASS] InvertedIndex:
+    Chỉ mục đảo ngược (Inverted Index) ánh xạ tag → tập hợp công thức phù hợp.
+
+Dùng để "đọc vị" khách: khi khách mô tả tâm trạng thay vì gọi thẳng tên món,
+hệ thống tìm các tag trong lời nói và gợi ý công thức phù hợp nhất.
+
+Cấu trúc nội bộ:
+    ``{ tag: set(drink_name) }``
+    Ví dụ: ``{"chua": {"Margarita", "Mojito"}, "mạnh": {"Martini", "Margarita"}}``
+
+Ứng dụng trong game:
+    - ``build()``: Xây dựng index khi khởi tạo game từ ``settings.RECIPES_DATA``.
+    - ``unlock_drink()``: Cập nhật index khi người chơi khám phá công thức ẩn.
+    - ``suggest()``: Trả về danh sách món phù hợp nhất với tags của khách.
+
+    (Method) __init__:
+      Khởi tạo index rỗng.
+    (Method) build:
+      Xây dựng chỉ mục từ toàn bộ dữ liệu công thức.
+
+Chỉ index các công thức đã mở khóa (``hidden=False``).
+Công thức ẩn sẽ được thêm sau qua ``unlock_drink()``.
+
+Args:
+    recipes_data (dict): Dữ liệu từ ``settings.RECIPES_DATA``.
+        Mỗi entry có dạng ``{name: {ingredients, tags, hidden}}``.
+    (Method) unlock_drink:
+      Thêm một công thức mới vừa được khám phá vào chỉ mục.
+
+Được gọi bởi ``MixingEngine`` khi người chơi pha thành công
+một công thức ẩn lần đầu tiên.
+
+Args:
+    drink_name (str): Tên công thức vừa khám phá.
+    tags (list[str]): Danh sách tag của công thức đó.
+    (Method) suggest:
+      Gợi ý các công thức phù hợp với danh sách tag cho trước.
+
+Tính điểm cho mỗi công thức dựa trên số tag khớp,
+sau đó sắp xếp giảm dần theo điểm (nhiều tag khớp = ưu tiên cao hơn).
+
+Args:
+    tags (list[str]): Danh sách tag trích xuất từ lời nói của khách.
+
+Returns:
+    list[str]: Danh sách tên công thức sắp xếp theo độ phù hợp,
+    hoặc ``[]`` nếu không tìm thấy gì.
+
+Example:
+    >>> idx.suggest(["chua", "mạnh"])
+    ["Margarita", "Martini", "Mojito"]
+    # Margarita có 2 tag khớp → đứng đầu
+  [FUNCTION] quick_sort_leaderboard:
+    Sắp xếp bảng điểm theo thứ tự giảm dần sử dụng Quick Sort.
+
+Pivot là phần tử giữa mảng. Mảng được phân thành 3 phần:
+lớn hơn pivot, bằng pivot, và nhỏ hơn pivot, sau đó đệ quy.
+
+Args:
+    arr (list[dict]): Danh sách entry bảng điểm.
+        Mỗi phần tử có dạng ``{'name': str, 'score': int}``.
+
+Returns:
+    list[dict]: Danh sách mới được sắp xếp giảm dần theo ``score``.
+        Danh sách đầu vào không bị thay đổi.
+
+Example:
+    >>> data = [{"name": "A", "score": 50}, {"name": "B", "score": 120}]
+    >>> quick_sort_leaderboard(data)
+    [{"name": "B", "score": 120}, {"name": "A", "score": 50}]
+
+Complexity: O(n log n) trung bình, O(n²) worst case.
+
+  [FUNCTION] merge_sort_inventory:
+    Sắp xếp danh sách nguyên liệu theo một key cho trước sử dụng Merge Sort.
+
+Thuật toán ổn định (stable) — thứ tự tương đối của các phần tử
+bằng nhau được bảo toàn. Tính chất này cho phép sắp xếp đa tiêu chí
+bằng cách gọi hàm 2 lần liên tiếp:
+
+.. code-block:: python
+
+    items = merge_sort_inventory(items, "name")  # sắp xếp phụ
+    items = merge_sort_inventory(items, "type")  # sắp xếp chính
+
+Kết quả: trong cùng ``type``, các nguyên liệu được sắp xếp theo ``name``.
+
+Args:
+    arr (list[dict]): Danh sách nguyên liệu.
+        Mỗi phần tử phải có key ``sort_key`` với giá trị là string.
+    sort_key (str): Tên trường dùng để so sánh. Mặc định là ``"name"``.
+
+Returns:
+    list[dict]: Danh sách mới đã sắp xếp tăng dần (A–Z, không phân biệt hoa/thường).
+        Danh sách đầu vào không bị thay đổi.
+
+Complexity: O(n log n) — ổn định trên mọi đầu vào.
+
+  [FUNCTION] _merge:
+    Gộp hai danh sách đã sắp xếp thành một danh sách sắp xếp duy nhất.
+
+Hàm nội bộ, được gọi bởi ``merge_sort_inventory()``.
+So sánh không phân biệt hoa/thường (lowercase).
+
+Args:
+    left (list[dict]): Nửa trái đã sắp xếp.
+    right (list[dict]): Nửa phải đã sắp xếp.
+    key (str): Trường dùng để so sánh.
+
+Returns:
+    list[dict]: Danh sách đã gộp và sắp xếp.
+
+
+============================================================
+--- MODULE: game_logic.py ---
+Toàn bộ logic game — KHÔNG import pygame.
+
+Module này hoạt động như tầng model/business-logic thuần túy.
+Giao tiếp với ``ui.py`` chỉ qua data thuần (dict, list, string),
+không bao giờ trả về đối tượng pygame.
+
+Các lớp chính:
+    - Customer        : Model dữ liệu một khách hàng.
+    - CustomerManager : Quản lý vòng đời khách (spawn, seat, timeout, serve).
+    - MixingEngine    : Xử lý shaker, kiểm tra công thức, khám phá món mới.
+    - GameState       : Máy trạng thái tổng thể của một ván chơi.
+
+Luồng phụ thuộc:
+    ``main.py`` → ``GameState`` → ``CustomerManager`` + ``MixingEngine``
+                                → ``algorithms.py`` (MinHeap, WaitingQueue, ActionStack, Trie, InvertedIndex)
+                                → ``settings.py``  (hằng số, dữ liệu)
+
+  [CLASS] Customer:
+    Model dữ liệu đại diện cho một khách hàng trong game.
+
+Mỗi khách có hai kiểu gọi món:
+    - ``"direct"`` : Gọi thẳng tên món (vd: "Cho tôi Martini").
+      ``request_data`` là tên món (str).
+    - ``"mood"``   : Mô tả tâm trạng (vd: "Tôi cần thứ gì đó đắng và mạnh").
+      ``request_data`` là dict ``{text: str, tags: list[str]}``.
+
+Thời gian kiên nhẫn được tính real-time bằng ``time.time()``.
+Khách VIP ít kiên nhẫn hơn nhưng cho nhiều điểm hơn.
+
+Attributes:
+    id (int): ID duy nhất tăng dần, dùng làm key trong MinHeap.
+    name (str): Tên hiển thị của khách (lấy ngẫu nhiên từ ``CUSTOMER_NAMES``).
+    is_vip (bool): ``True`` nếu là khách VIP.
+    request_type (str): ``"direct"`` hoặc ``"mood"``.
+    request_data (str | dict): Nội dung yêu cầu tương ứng với ``request_type``.
+    patience (float): Tổng thời gian kiên nhẫn (giây).
+    start_time (float): Timestamp lúc khách xuất hiện (``time.time()``).
+
+    (Method) __init__:
+      Khởi tạo một khách hàng mới.
+
+Args:
+    c_id (int): ID duy nhất của khách.
+    name (str): Tên hiển thị.
+    is_vip (bool): ``True`` nếu là khách VIP.
+    request_type (str): ``"direct"`` hoặc ``"mood"``.
+    request_data (str | dict): Nội dung yêu cầu.
+    voice_key (str | None): Key âm thanh lời thoại, hoặc ``None`` nếu gọi trực tiếp.
+    (Method) time_left:
+      Thời gian còn lại (giây) trước khi khách bỏ đi.
+
+Được tính real-time từ ``time.time()`` nên không cần cập nhật thủ công.
+
+Returns:
+    float: Giá trị trong khoảng ``[0.0, patience]``.
+    (Method) patience_ratio:
+      Tỉ lệ kiên nhẫn còn lại, dùng để vẽ thanh màu trong UI.
+
+Returns:
+    float: ``1.0`` (đầy kiên nhẫn) → ``0.0`` (hết kiên nhẫn).
+    (Method) is_expired:
+      Kiểm tra khách đã hết kiên nhẫn và bỏ đi chưa.
+
+Returns:
+    bool: ``True`` nếu ``time_left <= 0``.
+  [CLASS] CustomerManager:
+    Quản lý toàn bộ vòng đời khách hàng trong một ván chơi.
+
+Hai cấu trúc dữ liệu chính:
+    - ``active`` (MinHeap)     : Khách đang ngồi tại quầy,
+      sắp xếp theo ``time_left`` tăng dần.
+    - ``waiting`` (WaitingQueue): Khách đứng chờ ngoài cửa (FIFO).
+
+Khi ``active`` chưa đầy (< ``MAX_CUSTOMERS_ON_SCREEN``), khách mới được
+ngồi thẳng vào quầy. Ngược lại, họ vào hàng đợi bên ngoài.
+
+    (Method) __init__:
+      Khởi tạo manager với heap và queue rỗng.
+    (Method) spawn:
+      Tạo một khách mới ngẫu nhiên và đưa vào quầy hoặc hàng chờ.
+
+Xác suất 50% gọi trực tiếp tên món, 50% mô tả tâm trạng.
+Nếu quầy còn chỗ trống, khách ngồi vào ngay; ngược lại xếp hàng ngoài cửa.
+    (Method) _seat:
+      Đưa khách vào MinHeap (ngồi vào ghế tại quầy).
+
+Key của heap là ``time_left`` hiện tại của khách.
+Key này sẽ được cập nhật mỗi frame trong ``update()``.
+
+Args:
+    customer (Customer): Khách cần cho ngồi.
+    (Method) update:
+      Cập nhật trạng thái toàn bộ khách mỗi frame.
+
+Các bước thực hiện:
+    1. Đồng bộ lại key ``time_left`` trong heap theo thời gian thực.
+    2. Rebuild heap để đảm bảo heap property sau khi key thay đổi.
+    3. Pop các khách ở đỉnh heap đã hết kiên nhẫn (``time_left <= 0``).
+    4. Với mỗi khách timeout, thử đưa người tiếp theo từ hàng chờ vào.
+
+Lý do chỉ check đỉnh heap:
+    MinHeap đảm bảo phần tử nhỏ nhất ở đỉnh. Nếu đỉnh chưa hết
+    kiên nhẫn, các phần tử bên dưới chắc chắn cũng chưa hết.
+
+Returns:
+    list[Customer]: Danh sách khách vừa timeout trong frame này.
+        ``GameState`` dùng list này để trừ điểm.
+    (Method) serve:
+      Xóa khách đã được phục vụ khỏi heap và điền chỗ trống từ hàng chờ.
+
+Args:
+    customer_id (int): ID của khách vừa được phục vụ.
+    (Method) get_active_list:
+      Trả về danh sách tất cả khách đang ngồi tại quầy.
+
+Returns:
+    list[Customer]: Dùng bởi ``Renderer`` để vẽ CustomerCard.
+    (Method) get_next_customer:
+      Lấy khách gấp nhất hiện tại (đỉnh MinHeap) mà không xóa họ.
+
+Returns:
+    Customer | None: Khách sắp hết kiên nhẫn nhất,
+    hoặc ``None`` nếu quầy trống.
+    (Method) _fill_from_waiting:
+      Đưa khách tiếp theo từ hàng chờ vào quầy nếu còn chỗ trống.
+
+Được gọi tự động sau mỗi lần ``serve()`` hoặc timeout.
+  [CLASS] MixingEngine:
+    Xử lý toàn bộ logic pha chế: quản lý bình lắc, kiểm tra công thức,
+và xử lý việc khám phá các món ẩn.
+
+Sử dụng ba cấu trúc dữ liệu từ ``algorithms.py``:
+    - ``LiquidShaker`` : Lưu trữ và trộn nguyên liệu theo thể tích.
+    - ``Trie``          : Hỗ trợ autocomplete tên công thức.
+    - ``InvertedIndex`` : Gợi ý công thức theo tag tâm trạng khách.
+
+Attributes:
+    shaker (LiquidShaker): Bình lắc hiện tại.
+    recipe_trie (Trie): Cây tiền tố chứa các công thức đã mở khóa.
+    inv_index (InvertedIndex): Chỉ mục đảo ngược tag → công thức.
+
+    (Method) __init__:
+      Khởi tạo engine với dữ liệu công thức và callback khám phá.
+
+Args:
+    recipes_data (dict): Dữ liệu công thức từ ``settings.RECIPES_DATA``.
+    discovered_cb (callable | None): Hàm callback nhận ``drink_name`` (str)
+        được gọi khi người chơi khám phá công thức ẩn lần đầu tiên.
+    (Method) _load_recipes:
+      Nạp dữ liệu công thức vào Trie và InvertedIndex khi khởi tạo.
+
+Chỉ chèn vào Trie các công thức chưa ẩn (``hidden=False``).
+Công thức ẩn sẽ được thêm sau qua ``InvertedIndex.unlock_drink()``
+khi người chơi khám phá ra.
+
+Args:
+    recipes_data (dict): Dữ liệu từ ``settings.RECIPES_DATA``.
+    (Method) pour:
+      Rót nguyên liệu vào bình lắc, tự tra màu từ ``INGREDIENTS_DATA``.
+
+Args:
+    ingredient_name (str): Tên nguyên liệu cần rót.
+    amount (float): Lượng rót (ml).
+
+Returns:
+    bool: ``True`` nếu rót thành công, ``False`` nếu bình đầy.
+    (Method) clear_shaker:
+      Đổ bỏ toàn bộ nội dung bình lắc về trạng thái rỗng.
+    (Method) get_shaker_state:
+      Trả về trạng thái hiện tại của bình lắc để Renderer vẽ.
+
+Returns:
+    tuple: ``(current_volume, capacity, mixed_color)`` —
+    thể tích hiện tại (float), dung tích tối đa (float),
+    và màu RGB hỗn hợp (tuple | None).
+    (Method) identify_drink:
+      Nhận diện món đồ uống hiện tại trong bình lắc (không chấm điểm).
+Trả về (drink_name, error_margin). Nếu lỗi > 30% thì drink_name = None.
+    (Method) check_and_serve:
+      Kiểm tra nội dung bình lắc, xác định món pha, và tính điểm.
+    (Method) suggest_by_tags:
+      Gợi ý công thức phù hợp với danh sách tag.
+
+Ủy quyền cho ``InvertedIndex.suggest()``.
+
+Args:
+    tags (list[str]): Danh sách tag cần tra cứu.
+
+Returns:
+    list[str]: Tên các công thức sắp xếp theo độ phù hợp giảm dần.
+    (Method) search_recipes:
+      Tìm kiếm thông minh: Trả về công thức khớp tên (Trie) HOẶC khớp tag.
+Hỗ trợ gõ dấu '#' ở đầu để tập trung tìm tag.
+  [CLASS] GameState:
+    Máy trạng thái tổng thể điều phối toàn bộ một ván chơi.
+
+Quản lý:
+    - Chuyển tiếp giữa các trạng thái: MENU → PLAYING ↔ PAUSED → GAMEOVER.
+    - Spawn khách theo interval thời gian thực.
+    - Cộng/trừ điểm và cập nhật bảng điểm.
+    - Điều phối ``CustomerManager`` và ``MixingEngine``.
+    - Cung cấp các getter thuần để ``Renderer`` lấy data cần vẽ.
+
+States:
+    - ``"MENU"``    : Màn hình chờ, chưa bắt đầu chơi.
+    - ``"PLAYING"`` : Đang chơi, ``update()`` được gọi mỗi frame.
+    - ``"PAUSED"``  : Tạm dừng, logic đóng băng, UI vẫn vẽ.
+    - ``"GAMEOVER"``: Kết thúc, hiển thị điểm và bảng xếp hạng.
+
+Attributes:
+    state (str): Trạng thái hiện tại, một trong ``STATES``.
+    score (int): Điểm số hiện tại của người chơi (không âm).
+    customers_total (int): Tổng số khách đã xử lý (phục vụ + timeout).
+    leaderboard (list[dict]): Bảng điểm cao, sắp xếp giảm dần.
+
+    (Method) __init__:
+      Khởi tạo GameState về trạng thái ban đầu (MENU).
+
+Tạo mới ``CustomerManager``, ``MixingEngine``, và đặt lại
+toàn bộ biến theo dõi game.
+    (Method) update:
+      Cập nhật game logic cho một frame.
+
+Chỉ thực thi khi ``state == "PLAYING"``. Các bước:
+    1. Kiểm tra interval spawn → gọi ``customer_manager.spawn()`` nếu đến giờ
+       và chưa đạt ``MAX_CUSTOMERS_PER_GAME``.
+    2. Cập nhật heap khách, nhận về danh sách khách timeout → trừ điểm.
+    3. Kiểm tra điều kiện kết thúc game:
+       đã xử lý đủ khách VÀ quầy không còn ai.
+
+Được gọi bởi ``main.py`` mỗi iteration của game loop.
+    (Method) serve_current_customer:
+      Xử lý hành động phục vụ khi người chơi nhấn SPACE hoặc nút Serve.
+
+Lấy khách gấp nhất (đỉnh MinHeap), kiểm tra công thức trong bình lắc,
+cộng/trừ điểm, xóa khách khỏi heap, tăng đếm khách, và reset bình.
+
+Returns:
+    dict | None: Kết quả phục vụ từ ``MixingEngine.check_and_serve()``
+        để ``Renderer`` hiển thị feedback (flash, banner).
+        ``None`` nếu quầy không có khách.
+    (Method) pour_ingredient:
+      Rót nguyên liệu vào bình lắc. Được gọi mỗi frame khi người chơi
+kéo chai vào vùng Shaker và giữ chuột.
+
+Args:
+    name (str): Tên nguyên liệu.
+    amount (float): Lượng rót mỗi frame (ml), lấy từ ``POUR_RATE``.
+
+Returns:
+    bool: ``True`` nếu rót thành công, ``False`` nếu bình đầy.
+    (Method) clear_shaker:
+      Xóa toàn bộ bình lắc (phím C).
+    (Method) finish_shaking:
+      Gọi khi lắc xong để nhận diện món.
+    (Method) search_recipes:
+      Gọi hàm tìm kiếm thông minh từ MixingEngine (dùng cho SearchBar).
+    (Method) suggest_by_tags:
+      Gợi ý công thức theo tag (dùng để hiển thị hint cho order "mood").
+
+Args:
+    tags (list[str]): Danh sách tag cần gợi ý.
+
+Returns:
+    list[str]: Danh sách tên công thức theo độ phù hợp.
+    (Method) start_game:
+      Reset hoàn toàn và bắt đầu một ván chơi mới.
+
+Gọi ``__init__()`` để reset state, sau đó chuyển sang ``"PLAYING"``
+và spawn khách đầu tiên ngay lập tức (không chờ interval).
+    (Method) toggle_pause:
+      Chuyển đổi qua lại giữa trạng thái ``"PLAYING"`` và ``"PAUSED"`` (phím P).
+
+Không làm gì nếu state không phải PLAYING hoặc PAUSED.
+    (Method) _end_game:
+      Kết thúc ván chơi: chuyển sang ``"GAMEOVER"`` và cập nhật bảng điểm.
+
+Thêm điểm hiện tại vào ``leaderboard`` rồi sắp xếp lại
+bằng ``quick_sort_leaderboard``.
+    (Method) _save_leaderboard:
+      Ghi bảng điểm ra file JSON
+    (Method) _load_leaderboard:
+      Đọc bảng điểm từ file JSON (nếu có)
+    (Method) get_active_customers:
+      Trả về danh sách khách đang ngồi tại quầy để UI vẽ CustomerCard.
+
+Returns:
+    list[Customer]: Danh sách khách theo thứ tự trong heap.
+    (Method) get_next_customer:
+      Trả về khách gấp nhất (đỉnh MinHeap) để UI hiển thị hint.
+
+Returns:
+    Customer | None: Khách sắp hết kiên nhẫn nhất, hoặc ``None``.
+    (Method) get_shaker_state:
+      Trả về trạng thái hiện tại của bình lắc để Renderer vẽ.
+
+Returns:
+    tuple: ``(current_volume, capacity, mixed_color)`` —
+    thể tích hiện tại (float), dung tích tối đa (float),
+    và màu RGB hỗn hợp (tuple), hoặc ``None`` nếu bình rỗng.
+    (Method) get_sorted_inventory:
+      Trả về danh sách nguyên liệu đã sắp xếp để ``InventoryPanel`` vẽ.
+
+Sắp xếp 2 lần (stable sort):
+    1. Theo ``name`` (A–Z) — tiêu chí phụ.
+    2. Theo ``type`` (A–Z) — tiêu chí chính.
+
+Kết quả: trong cùng ``type``, nguyên liệu được sắp theo ``name``.
+
+Returns:
+    list[dict]: Danh sách nguyên liệu (name, color, asset, price, type).
+
+============================================================
+--- MODULE: ui.py ---
+Toàn bộ giao diện Pygame.
+Chỉ nhận data từ game_state, KHÔNG chứa logic game.
+
+  [FUNCTION] load_font:
+    Tải font từ file, fallback về Arial nếu file không tồn tại.
+
+Args:
+    path (str): Đường dẫn đến file font (vd: ``"assets/pixel_font.ttf"``).
+    size (int): Cỡ chữ (px).
+
+Returns:
+    pygame.font.Font: Đối tượng font đã tải.
+
+  [FUNCTION] load_image:
+    Tải và scale ảnh từ file, fallback về hình chữ nhật màu nếu không tìm thấy.
+
+Args:
+    path (str): Đường dẫn đến file ảnh.
+    size (tuple): Kích thước đích ``(width, height)`` (px).
+    fallback_color (tuple): Màu RGB dùng khi file không tồn tại. Mặc định ``(80, 80, 100)``.
+
+Returns:
+    pygame.Surface: Surface đã scale về kích thước ``size``.
+
+  [FUNCTION] draw_text:
+    Vẽ chuỗi văn bản lên surface tại tọa độ cho trước.
+
+Args:
+    surf (pygame.Surface): Surface đích.
+    text (str): Chuỗi cần vẽ.
+    font (pygame.font.Font): Font sử dụng.
+    color (tuple): Màu RGB của chữ.
+    x (int): Tọa độ X (pixel).
+    y (int): Tọa độ Y (pixel).
+    anchor (str): Điểm neo của rect, mặc định ``"topleft"``.
+        Có thể là bất kỳ thuộc tính nào của ``pygame.Rect``
+        (vd: ``"center"``, ``"midtop"``, ``"topright"``).
+
+Returns:
+    pygame.Rect: Rect của văn bản vừa vẽ (dùng để hit-test nếu cần).
+
+  [CLASS] Particle:
+    Hạt hiệu ứng rơi xuống mô phỏng chất lỏng chảy ra khi rót vào bình.
+
+Mỗi hạt có vận tốc ngẫu nhiên, chịu gia tốc trọng trường giả lập,
+và mờ dần (alpha giảm) cho đến khi biến mất.
+
+Attributes:
+    x, y (float): Vị trí hiện tại.
+    dx, dy (float): Vận tốc theo trục X và Y (pixel/frame).
+    color (tuple): Màu RGB của hạt.
+    life (int): Độ trong suốt hiện tại (255 → 0); hạt biến mất khi <= 0.
+    size (int): Bán kính hạt (px).
+
+    (Method) __init__:
+      Khởi tạo hạt tại vị trí ``(x, y)`` với màu ``color`` và thông số ngẫu nhiên.
+
+Args:
+    x (float): Tọa độ X xuất phát.
+    y (float): Tọa độ Y xuất phát.
+    color (tuple): Màu RGB của hạt.
+    (Method) update:
+      Cập nhật vị trí và trạng thái hạt cho một frame.
+
+Di chuyển theo vận tốc, áp dụng gia tốc rơi tự do giả lập
+(``dy += 0.3``), và giảm ``life`` đi 8 mỗi frame.
+  [CLASS] Bottle:
+    Đại diện cho một chai nguyên liệu có thể kéo-thả (Drag & Drop) trong InventoryPanel.
+
+Khi đang kéo (``is_dragging = True``), chai di chuyển theo chuột và
+có thể được nghiêng để tạo hiệu ứng rót khi chuột nằm trên Shaker.
+
+Attributes:
+    name (str): Tên nguyên liệu (vd: ``"Vodka"``).
+    color (tuple): Màu RGB của nguyên liệu, dùng làm fallback khi thiếu ảnh.
+    origin (tuple): Tọa độ ``(x, y)`` gốc trong InventoryPanel,
+        dùng để reset về vị trí ban đầu khi nhả chuột.
+    rect (pygame.Rect): Rect hiện tại của chai (110×95 px).
+    is_dragging (bool): ``True`` nếu chai đang được kéo.
+
+    (Method) reset_position:
+      Trả chai về vị trí gốc trong InventoryPanel và tắt trạng thái kéo.
+
+Được gọi khi người chơi nhả chuột hoặc khi panel bị ẩn.
+    (Method) draw:
+      Vẽ chai lên surface theo trạng thái hiện tại.
+
+Khi đang kéo: chỉ vẽ ảnh (không có nền), xoay 120° nếu ``is_pouring``.
+Khi không kéo: vẽ khung nền tối, ảnh căn giữa, và tên bên dưới.
+
+Args:
+    surface (pygame.Surface): Surface đích.
+    font (pygame.font.Font): Font dùng để vẽ tên nguyên liệu.
+    is_pouring (bool): ``True`` khi chuột đang nằm trên vùng Shaker,
+        kích hoạt hiệu ứng nghiêng chai. Mặc định ``False``.
+  [CLASS] CustomerCard:
+    Đại diện cho thẻ hiển thị thông tin và yêu cầu của một khách hàng.
+
+Phương thức chính:
+    draw(surface, customer, x, y, font, small_font): Vẽ thẻ khách hàng, tự động ngắt dòng 
+        văn bản (Word Wrap) và hiển thị thanh kiên nhẫn (Patience Bar).
+    _draw_patience_bar(...): Vẽ thanh thời gian giảm dần dựa trên tỉ lệ kiên nhẫn còn lại.
+
+  [CLASS] ShakerUI:
+    Giao diện bình lắc: vẽ chất lỏng dâng lên, xử lý thao tác lắc chuột,
+và hiệu ứng flash khi phục vụ xong.
+
+Cơ chế lắc: người chơi giữ chuột trên bình và di trái/phải nhanh.
+Mỗi khi ``delta_x > 18 px`` giữa hai frame liên tiếp, ``shake_progress``
+tăng 1. Khi đạt ``SHAKE_THRESHOLD``, lắc hoàn thành.
+
+Attributes:
+    shake_progress (int): Số nhịp lắc hiện tại.
+    is_shaking (bool): ``True`` khi đang trong chế độ lắc (chuột đang giữ trên bình).
+    RECT (pygame.Rect): Vùng hiển thị bình lắc trên màn hình (tĩnh, class-level).
+
+  [CLASS] SearchBar:
+    Giao diện thanh tìm kiếm thông minh (Search Bar).
+Hỗ trợ gõ phím, bôi đen (Ctrl+A), cuộn danh sách (Scroll) và tự động 
+đề xuất (Autocomplete) công thức dựa trên thuật toán Trie.
+
+    (Method) __init__:
+      Khởi tạo các thông số hình học và trạng thái mặc định của thanh tìm kiếm.
+    (Method) handle_event:
+      Bắt sự kiện bàn phím và chuột cho thanh tìm kiếm.
+
+Args:
+    event (pygame.event.Event): Sự kiện từ Pygame.
+    search_fn (callable): Hàm callback truyền vào từ khóa và trả về kết quả tìm kiếm.
+
+Returns:
+    dict | None: Trả về dict chứa lệnh ghim công thức (vd: {"action": "pin", ...}) nếu click chọn, ngược lại trả về None.
+    (Method) draw:
+      Vẽ thanh tìm kiếm, con trỏ nhấp nháy và danh sách xổ xuống (nếu đang active).
+
+Args:
+    surface (pygame.Surface): Surface đích để vẽ.
+    font (pygame.font.Font): Font chữ lớn cho thanh gõ.
+    small_font (pygame.font.Font): Font chữ nhỏ cho danh sách kết quả.
+  [CLASS] InventoryPanel:
+    Giao diện kho chứa nguyên liệu (Inventory).
+Hỗ trợ phân loại qua các Tab, thanh cuộn (Scrollbar) dọc và ô tìm kiếm nội bộ.
+
+    (Method) __init__:
+      Khởi tạo kho nguyên liệu.
+
+Args:
+    sorted_inventory (list[dict]): Danh sách nguyên liệu đã được sắp xếp sẵn.
+    (Method) _build:
+      Xây dựng lại danh sách chai (bottles) hiển thị dựa trên bộ lọc Tab và thanh tìm kiếm.
+
+Args:
+    sorted_inventory (list[dict] | None): Cập nhật danh sách mới (nếu có).
+    (Method) handle_event:
+      Xử lý sự kiện click chuyển Tab, cuộn chuột và gõ phím tìm kiếm nguyên liệu.
+
+Args:
+    event (pygame.event.Event): Sự kiện từ Pygame.
+    (Method) draw:
+      Vẽ toàn bộ kho, bao gồm khung, tab, ô search, thanh cuộn và các chai rượu.
+Dùng kỹ thuật surface.set_clip() để không vẽ tràn ra ngoài khung.
+
+Args:
+    surface (pygame.Surface): Surface đích.
+    font (pygame.font.Font): Font chữ dùng cho Tab và tiêu đề.
+    small_font (pygame.font.Font): Font chữ dùng cho tên chai rượu.
+    (Method) get_dragging:
+      Lấy đối tượng chai rượu đang được người chơi nhấc lên (kéo thả).
+
+Returns:
+    Bottle | None: Đối tượng chai đang bị kéo, hoặc None.
+  [CLASS] Button:
+    Nút bấm UI cơ bản hỗ trợ đổi màu khi di chuột vào (hover) và bắt sự kiện click.
+
+    (Method) __init__:
+      Khởi tạo thông số hình học, màu sắc và text hiển thị của nút.
+    (Method) draw:
+      Vẽ nút bấm và chữ căn giữa, tự đổi màu theo trạng thái hover.
+    (Method) handle_event:
+      Xử lý sự kiện di chuột và click.
+
+Returns:
+    bool: True nếu nút được nhấn chuột trái.
+  [CLASS] VolumeSlider:
+    Thanh trượt UI để điều chỉnh giá trị từ 0.0 đến 1.0 (âm lượng).
+
+    (Method) __init__:
+      Khởi tạo kích thước, nhãn dán và giá trị ban đầu.
+    (Method) draw:
+      Vẽ thanh trượt, nút kéo (knob) và giá trị % hiện tại.
+    (Method) handle_event:
+      Xử lý kéo thả chuột (Drag & Drop) để thay đổi giá trị.
+
+Returns:
+    bool: True nếu thanh trượt đang bị tác động.
+  [CLASS] Renderer:
+    Lớp điều phối (Manager) chịu trách nhiệm vẽ toàn bộ các thành phần lên màn hình.
+
+Thuộc tính:
+    show_tools (bool): Biến kiểm soát việc ẩn/hiện quầy pha chế (Toggle Tools).
+
+Phương thức chính:
+    draw_playing(game_state, dt_ms): Hàm chính vẽ giao diện trong trạng thái đang chơi.
+    handle_event(event, game_state): Chuyển tiếp các sự kiện chuột/phím đến đúng thành phần UI.
+    toggle_tools(): Chuyển đổi trạng thái hiển thị của bình lắc và kho nguyên liệu.
+
+    (Method) __init__:
+      Khởi tạo tất cả các thành phần UI, font chữ, hình ảnh và hoạt ảnh.
+    (Method) toggle_tools:
+      Bật/tắt hiển thị của thanh kho nguyên liệu và bình shaker (Phím TAB).
+    (Method) spawn_particles:
+      Tạo ra một loạt hạt hiệu ứng (Particle) tại tọa độ cụ thể.
+
+Args:
+    x, y (int): Tọa độ trung tâm phát sinh.
+    color (tuple): Màu sắc của hạt.
+    (Method) draw_rubber_arm:
+      Vẽ cánh tay "cao su" co dãn theo vị trí chuột.
+Sử dụng kỹ thuật chia cắt sprite và gradient mask để giấu vết nối.
+
+Args:
+    mouse_pos (tuple): Tọa độ (x, y) hiện tại của con trỏ chuột.
+
+Returns:
+    tuple: Tọa độ thực tế (x, y) của đầu bàn tay sau khi tính toán chống co rúm.
+    (Method) draw_pinned_recipe:
+      Vẽ bảng công thức đang được ghim ngay bên dưới thanh Search Bar.
+    (Method) load_glass_image:
+      Tải và cache hình ảnh ly thành phẩm (Glass).
+
+Args:
+    name (str): Tên công thức để map với file ảnh.
+
+Returns:
+    pygame.Surface | None: Hình ảnh ly đã được resize, hoặc None nếu không có file.
+    (Method) draw_playing:
+      Vẽ toàn bộ giao diện trong trạng thái PLAYING (quầy, khách, shaker, UI).
+    (Method) draw_paused:
+      Vẽ lớp phủ mờ đục và menu Pause đè lên giao diện chính.
+    (Method) draw_gameover:
+      Vẽ màn hình Game Over và danh sách bảng xếp hạng Leaderboard.
+    (Method) handle_event:
+      Điều phối các sự kiện Pygame đến đúng thành phần UI tương ứng 
+(SearchBar, Inventory, Shaker, Bottles).
+
+Returns:
+    dict: Hành động được kích hoạt (ví dụ: {"shake_done": True}).
+
+============================================================
+--- MODULE: main.py ---
+Điểm khởi chạy duy nhất.
+Chỉ chứa vòng lặp Pygame + kết nối game_state ↔ renderer.
+
+  [FUNCTION] main:
+    Hàm khởi chạy chính của trò chơi Bartender Simulator.
+
+Chức năng:
+    1. Khởi tạo thư viện Pygame, cửa sổ hiển thị và các tài nguyên (âm thanh, hình ảnh).
+    2. Khởi tạo đối tượng GameState (Logic) và Renderer (Giao diện).
+    3. Thực hiện vòng lặp game (Game Loop) với tần số 60 FPS.
+    4. Điều phối việc cập nhật trạng thái (Update) và vẽ (Draw) qua từng frame.
+    5. Quản lý việc chuyển đổi giữa các trạng thái game (MENU, PLAYING, GAMEOVER).
+
+
+============================================================
+
+
+============================================================
+  [CLASS] _SoundManager:
+    Quản lý toàn bộ âm thanh của game: nhạc nền, hiệu ứng, và tiếng rót rượu.
+
+Được thiết kế dưới dạng singleton, truy cập qua biến toàn cục ``sound_mgr``.
+Tất cả âm thanh được nạp lười (lazy) sau khi gọi ``init()``.
+
+    (Method) __init__:
+      Khởi tạo manager ở trạng thái chưa kích hoạt, chưa nạp file âm thanh.
+    (Method) init:
+      Khởi tạo pygame.mixer và nạp toàn bộ file âm thanh vào bộ nhớ.
+
+Phải được gọi một lần sau ``pygame.init()`` trước khi dùng bất kỳ
+phương thức nào khác. Dành riêng kênh số 1 cho tiếng rót rượu lặp vô hạn.
+    (Method) _load:
+      Nạp một file âm thanh vào ``self.sounds[name]``.
+
+Bỏ qua âm thầm nếu file không tồn tại (tránh crash khi thiếu asset).
+
+Args:
+    name (str): Key tra cứu nội bộ (vd: ``"pour"``, ``"khen"``).
+    path (str): Đường dẫn tương đối đến file âm thanh.
+    (Method) play:
+      Phát hiệu ứng âm thanh 1 lần (Click, chấm điểm, khách nói...)
+    (Method) play_bgm:
+      Bật nhạc nền chạy lặp vô tận
+    (Method) set_bgm_volume:
+      Cập nhật âm lượng nhạc nền đang phát.
+
+Args:
+    vol (float): Giá trị trong ``[0.0, 1.0]``, tự động clamp nếu vượt ngoài.
+    (Method) set_sfx_volume:
+      Cập nhật âm lượng cho toàn bộ hiệu ứng âm thanh (SFX).
+
+Áp dụng cho mọi sound trong ``self.sounds`` ngoại trừ nhạc nền.
+Tiếng gõ phím (``"type"``) được giữ nhỏ hơn 70% so với các SFX khác.
+
+Args:
+    vol (float): Giá trị trong ``[0.0, 1.0]``, tự động clamp nếu vượt ngoài.
+    (Method) start_pouring:
+      Phát tiếng rót rượu lặp vô hạn khi đang giữ chuột
+    (Method) stop_pouring:
+      Ngắt tiếng rót rượu khi nhả chuột ra
+
